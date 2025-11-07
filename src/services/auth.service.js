@@ -38,17 +38,25 @@ async function register({ email, password }) {
 
     console.log(`[register] Issuing tokens...`);
     const { accessToken, refreshToken } = await issueTokensForUser(user);
-    
-    // Enviar email de verificación (no bloquea el registro si falla)
-    try {
-      await sendVerificationEmailForUser(user.id, email);
-    } catch (emailError) {
-      console.error(`[register] Failed to send verification email:`, emailError.message);
-      // No lanzar error, el usuario ya está registrado
-    }
+
+    const response = { user: serializeUser(user), accessToken, refreshToken };
+
+    // Enviar email de verificación de forma asíncrona (no bloquear registro)
+    setImmediate(() => {
+      sendVerificationEmailForUser(user.id, email)
+        .then(() => {
+          console.log(`[register] Verification email sent successfully for user: ${user.id}`);
+        })
+        .catch((emailError) => {
+          console.error(
+            `[register] Failed to send verification email for user ${user.id}:`,
+            emailError.message
+          );
+        });
+    });
     
     console.log(`[register] Registration successful for user: ${user.id}`);
-    return { user: serializeUser(user), accessToken, refreshToken };
+    return response;
   } catch (error) {
     console.error(`[register] Error during registration:`, error.message);
     throw error;
