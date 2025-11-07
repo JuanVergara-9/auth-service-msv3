@@ -8,4 +8,8 @@ router.post('/refresh', ctrl.refresh);
 router.post('/logout', ctrl.logout);
 router.get('/me', requireAuth, ctrl.me);
 
+// Email verification
+router.post('/verify-email/send', requireAuth, ctrl.sendVerificationEmail);
+router.get('/verify-email', ctrl.verifyEmail);
+
 module.exports = router;

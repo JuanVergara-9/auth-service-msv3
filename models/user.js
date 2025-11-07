@@ -10,6 +10,7 @@ module.exports = (sequelize, DataTypes) => {
 
   User.associate = (models) => {
     User.hasMany(models.RefreshToken, { as: 'refreshTokens', foreignKey: 'user_id' });
+    User.hasMany(models.EmailVerificationToken, { as: 'emailVerificationTokens', foreignKey: 'user_id' });
   };
 
   return User;

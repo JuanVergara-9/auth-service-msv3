@@ -1,9 +1,10 @@
 const crypto = require('crypto');
-const { User, RefreshToken } = require('../../models');
+const { User, RefreshToken, EmailVerificationToken } = require('../../models');
 const { hashPassword, verifyPassword } = require('../utils/crypto');
 const { signAccessToken, signRefreshToken, verifyRefreshToken, expiresAtFromNow, uuidv4 } = require('../utils/jwt');
-const { badRequest, conflict, unauthorized } = require('../utils/httpError');
+const { badRequest, conflict, unauthorized, notFound } = require('../utils/httpError');
 const dayjs = require('dayjs');
+const { sendVerificationEmail, verifyEmailDomain } = require('./email.service');
 
 function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 
@@ -18,6 +19,16 @@ async function register({ email, password }) {
       throw conflict('AUTH.EMAIL_TAKEN', 'El email ya está registrado');
     }
 
+    // Verificar que el dominio del email existe (opcional, no bloquea si falla)
+    if (process.env.VERIFY_EMAIL_DOMAIN === 'true') {
+      console.log(`[register] Verifying email domain...`);
+      const domainValid = await verifyEmailDomain(email);
+      if (!domainValid) {
+        console.log(`[register] Email domain validation failed for: ${email}`);
+        throw badRequest('AUTH.INVALID_EMAIL_DOMAIN', 'El dominio del correo electrónico no es válido');
+      }
+    }
+
     console.log(`[register] Hashing password...`);
     const password_hash = await hashPassword(password);
     
@@ -27,6 +38,14 @@ async function register({ email, password }) {
 
     console.log(`[register] Issuing tokens...`);
     const { accessToken, refreshToken } = await issueTokensForUser(user);
+    
+    // Enviar email de verificación (no bloquea el registro si falla)
+    try {
+      await sendVerificationEmailForUser(user.id, email);
+    } catch (emailError) {
+      console.error(`[register] Failed to send verification email:`, emailError.message);
+      // No lanzar error, el usuario ya está registrado
+    }
     
     console.log(`[register] Registration successful for user: ${user.id}`);
     return { user: serializeUser(user), accessToken, refreshToken };
@@ -93,4 +112,63 @@ function serializeUser(user) {
   return { id: user.id, email: user.email, role: user.role, isEmailVerified: user.is_email_verified };
 }
 
-module.exports = { register, login, refresh, logout };
+// Generar y enviar token de verificación de email
+async function sendVerificationEmailForUser(userId, email) {
+  const user = await User.findByPk(userId);
+  if (!user) throw notFound('AUTH.USER_NOT_FOUND', 'Usuario no encontrado');
+  if (user.is_email_verified) {
+    throw badRequest('AUTH.ALREADY_VERIFIED', 'El email ya está verificado');
+  }
+
+  // Invalidar tokens anteriores no usados
+  await EmailVerificationToken.update(
+    { used: true },
+    { where: { user_id: userId, used: false } }
+  );
+
+  // Generar nuevo token
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = dayjs().add(24, 'hours').toDate();
+
+  await EmailVerificationToken.create({
+    user_id: userId,
+    token,
+    expires_at: expiresAt,
+    used: false
+  });
+
+  // Enviar email
+  await sendVerificationEmail(email, token, user.email.split('@')[0]);
+  return { success: true };
+}
+
+// Verificar token de email
+async function verifyEmailToken(token) {
+  const verificationToken = await EmailVerificationToken.findOne({
+    where: { token, used: false },
+    include: [{ model: User, as: 'user' }]
+  });
+
+  if (!verificationToken) {
+    throw badRequest('AUTH.INVALID_TOKEN', 'Token de verificación inválido o ya usado');
+  }
+
+  if (dayjs(verificationToken.expires_at).isBefore(dayjs())) {
+    throw badRequest('AUTH.TOKEN_EXPIRED', 'El token de verificación ha expirado');
+  }
+
+  // Marcar token como usado y verificar email del usuario
+  await verificationToken.update({ used: true });
+  await verificationToken.user.update({ is_email_verified: true });
+
+  return { success: true, user: serializeUser(verificationToken.user) };
+}
+
+module.exports = { 
+  register, 
+  login, 
+  refresh, 
+  logout, 
+  sendVerificationEmailForUser, 
+  verifyEmailToken 
+};
