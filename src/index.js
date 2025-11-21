@@ -28,8 +28,8 @@ app.use(cors({
     return callback(null, origins.length === 0 || origins.includes(origin));
   },
   credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','x-request-id']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id']
 }));
 
 app.use(helmet());
@@ -72,6 +72,39 @@ app.use('/api/v1/auth', authRoutes);
 app.use((err, req, res, next) => {
   console.error(`[${req.id}] Error:`, err.message);
   if (err.code === 'ECONNABORTED' || (err.message || '').includes('request aborted')) return;
+
+  // Handle Zod validation errors
+  if (err.name === 'ZodError') {
+    const firstIssue = err.issues[0];
+    let message = 'Datos inválidos';
+
+    // Create user-friendly messages in Spanish
+    if (firstIssue) {
+      const field = firstIssue.path.join('.');
+      const fieldName = field === 'email' ? 'El correo electrónico' :
+        field === 'password' ? 'La contraseña' :
+          'El campo';
+
+      if (firstIssue.code === 'too_small') {
+        if (field === 'password') {
+          message = `La contraseña debe tener al menos ${firstIssue.minimum} caracteres`;
+        } else {
+          message = `${fieldName} es demasiado corto`;
+        }
+      } else if (firstIssue.code === 'too_big') {
+        message = `${fieldName} es demasiado largo`;
+      } else if (firstIssue.code === 'invalid_string' && firstIssue.validation === 'email') {
+        message = 'El correo electrónico no es válido';
+      } else {
+        message = firstIssue.message || 'Datos inválidos';
+      }
+    }
+
+    return res.status(400).json({
+      error: { code: 'VALIDATION_ERROR', message, requestId: req.id }
+    });
+  }
+
   const status = err.status || 500;
   if (res.headersSent) return next(err);
   res.status(status).json({
