@@ -66,4 +66,11 @@ async function verifyEmail(req, res, next) {
   } catch (e) { next(e); }
 }
 
-module.exports = { register, login, me, refresh, logout, sendVerificationEmail, verifyEmail };
+async function usersSummary(req, res, next) {
+  try {
+    const result = await svc.getUsersSummary();
+    return res.json(result);
+  } catch (e) { next(e); }
+}
+
+module.exports = { register, login, me, refresh, logout, sendVerificationEmail, verifyEmail, usersSummary };

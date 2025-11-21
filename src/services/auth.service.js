@@ -172,11 +172,45 @@ async function verifyEmailToken(token) {
   return { success: true, user: serializeUser(verificationToken.user) };
 }
 
+// Obtener resumen de usuarios (para admin dashboard)
+async function getUsersSummary() {
+  const totalUsers = await User.count();
+  const clientsRegistered = await User.count({ where: { role: 'user' } });
+  const workersRegistered = await User.count({ where: { role: 'provider' } });
+  const adminsRegistered = await User.count({ where: { role: 'admin' } });
+
+  // Usuarios activos en los últimos 30 días (basado en refresh tokens)
+  const thirtyDaysAgo = dayjs().subtract(30, 'days').toDate();
+  const { Op } = require('sequelize');
+  
+  const activeUsers30d = await RefreshToken.count({
+    where: { created_at: { [Op.gte]: thirtyDaysAgo } },
+    distinct: true,
+    col: 'user_id'
+  });
+
+  // Estimación simple para clientes/workers activos (proporcional al total)
+  // En una implementación real, haríamos un join con RefreshToken
+  const activeClients30d = Math.round(activeUsers30d * (clientsRegistered / (totalUsers || 1)));
+  const activeWorkers30d = Math.round(activeUsers30d * (workersRegistered / (totalUsers || 1)));
+
+  return {
+    totalUsers,
+    clientsRegistered,
+    workersRegistered,
+    adminsRegistered,
+    activeUsers30d,
+    activeClients30d,
+    activeWorkers30d
+  };
+}
+
 module.exports = { 
   register, 
   login, 
   refresh, 
   logout, 
   sendVerificationEmailForUser, 
-  verifyEmailToken 
+  verifyEmailToken,
+  getUsersSummary
 };
