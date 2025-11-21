@@ -175,29 +175,113 @@ async function verifyEmailToken(token) {
 // Obtener resumen de usuarios (para admin dashboard)
 async function getUsersSummary() {
   const totalUsers = await User.count();
-  const clientsRegistered = await User.count({ where: { role: 'user' } });
-  const workersRegistered = await User.count({ where: { role: 'provider' } });
   const adminsRegistered = await User.count({ where: { role: 'admin' } });
 
-  // Usuarios activos en los últimos 30 días (basado en refresh tokens)
-  const thirtyDaysAgo = dayjs().subtract(30, 'days').toDate();
-  const { Op } = require('sequelize');
-  
-  const activeUsers30d = await RefreshToken.count({
-    where: { created_at: { [Op.gte]: thirtyDaysAgo } },
-    distinct: true,
-    col: 'user_id'
-  });
+  // Obtener lista de user_ids que son proveedores desde provider-service
+  let providerUserIds = [];
+  try {
+    // Intentar obtener desde el gateway o directamente del provider-service
+    const gatewayUrl = process.env.GATEWAY_URL || process.env.API_GATEWAY_URL || 'http://localhost:4000';
+    const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'http://localhost:3002';
+    
+    // Intentar primero por gateway, luego directo
+    let response;
+    try {
+      response = await fetch(`${gatewayUrl}/api/v1/providers/user-ids`, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch {
+      response = await fetch(`${providerServiceUrl}/api/v1/providers/user-ids`, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (response && response.ok) {
+      const data = await response.json();
+      providerUserIds = Array.isArray(data.userIds) ? data.userIds : [];
+    }
+  } catch (error) {
+    console.warn('[getUsersSummary] No se pudo obtener lista de proveedores:', error.message);
+    // Continuar sin la lista de proveedores (fallback)
+  }
 
-  // Estimación simple para clientes/workers activos (proporcional al total)
-  // En una implementación real, haríamos un join con RefreshToken
-  const activeClients30d = Math.round(activeUsers30d * (clientsRegistered / (totalUsers || 1)));
-  const activeWorkers30d = Math.round(activeUsers30d * (workersRegistered / (totalUsers || 1)));
+  // Calcular solo clientes: usuarios que NO son proveedores (excluyendo admins)
+  const { Op } = require('sequelize');
+  const soloClientes = providerUserIds.length > 0
+    ? await User.count({
+        where: {
+          role: 'user',
+          id: { [Op.notIn]: providerUserIds }
+        }
+      })
+    : await User.count({ where: { role: 'user' } }); // Fallback si no hay proveedores
+
+  // Proveedores: cantidad de user_ids únicos que tienen perfil de proveedor
+  const workersRegistered = providerUserIds.length;
+
+  // Usuarios activos en los últimos 30 días (basado en refresh tokens)
+  // Solo contar usuarios que realmente existen en la tabla users
+  const thirtyDaysAgo = dayjs().subtract(30, 'days').toDate();
+  
+  const { sequelize } = require('../../models');
+  const [activeUsersResult] = await sequelize.query(`
+    SELECT COUNT(DISTINCT rt.user_id) as count
+    FROM refresh_tokens rt
+    INNER JOIN users u ON rt.user_id = u.id
+    WHERE rt.created_at >= :thirtyDaysAgo
+      AND rt.user_id IS NOT NULL
+  `, {
+    replacements: { thirtyDaysAgo },
+    type: sequelize.QueryTypes.SELECT
+  });
+  
+  const activeUsers30d = Number(activeUsersResult?.count || 0);
+
+  // Calcular clientes activos: usuarios activos que NO son proveedores (y existen)
+  let activeClients30d = 0;
+  if (providerUserIds.length > 0) {
+    const placeholders = providerUserIds.map((_, i) => `$${i + 2}`).join(',');
+    const [activeClientsResult] = await sequelize.query(`
+      SELECT COUNT(DISTINCT rt.user_id) as count
+      FROM refresh_tokens rt
+      INNER JOIN users u ON rt.user_id = u.id
+      WHERE rt.created_at >= $1
+        AND rt.user_id IS NOT NULL
+        AND rt.user_id NOT IN (${placeholders})
+    `, {
+      bind: [thirtyDaysAgo, ...providerUserIds],
+      type: sequelize.QueryTypes.SELECT
+    });
+    activeClients30d = Number(activeClientsResult?.count || 0);
+  } else {
+    // Si no hay proveedores, todos los activos son clientes
+    activeClients30d = activeUsers30d;
+  }
+
+  // Calcular proveedores activos: usuarios activos que SÍ son proveedores (y existen)
+  let activeWorkers30d = 0;
+  if (providerUserIds.length > 0) {
+    const placeholders = providerUserIds.map((_, i) => `$${i + 2}`).join(',');
+    const [activeWorkersResult] = await sequelize.query(`
+      SELECT COUNT(DISTINCT rt.user_id) as count
+      FROM refresh_tokens rt
+      INNER JOIN users u ON rt.user_id = u.id
+      WHERE rt.created_at >= $1
+        AND rt.user_id IS NOT NULL
+        AND rt.user_id IN (${placeholders})
+    `, {
+      bind: [thirtyDaysAgo, ...providerUserIds],
+      type: sequelize.QueryTypes.SELECT
+    });
+    activeWorkers30d = Number(activeWorkersResult?.count || 0);
+  } else {
+    activeWorkers30d = 0;
+  }
 
   return {
     totalUsers,
-    clientsRegistered,
-    workersRegistered,
+    clientsRegistered: soloClientes, // Solo clientes (sin proveedores)
+    workersRegistered, // Cantidad de proveedores
     adminsRegistered,
     activeUsers30d,
     activeClients30d,
