@@ -7,9 +7,9 @@ const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const ACCESS_TTL = process.env.ACCESS_TOKEN_TTL || '15m';
 const REFRESH_TTL = process.env.REFRESH_TOKEN_TTL || '30d';
 
-function signAccessToken(user) {
+function signAccessToken(user, isProvider = false) {
   return jwt.sign(
-    { userId: user.id, role: user.role },
+    { userId: user.id, role: user.role, isProvider },
     ACCESS_SECRET,
     { expiresIn: ACCESS_TTL }
   );

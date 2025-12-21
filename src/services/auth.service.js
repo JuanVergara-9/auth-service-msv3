@@ -10,7 +10,7 @@ function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex');
 
 async function register({ email, password }) {
   console.log(`[register] Starting registration for email: ${email}`);
-  
+
   try {
     console.log(`[register] Checking if user exists...`);
     const exists = await User.findOne({ where: { email } });
@@ -31,15 +31,15 @@ async function register({ email, password }) {
 
     console.log(`[register] Hashing password...`);
     const password_hash = await hashPassword(password);
-    
+
     console.log(`[register] Creating user...`);
     const user = await User.create({ email, password_hash, role: 'user' });
     console.log(`[register] User created with ID: ${user.id}`);
 
     console.log(`[register] Issuing tokens...`);
-    const { accessToken, refreshToken } = await issueTokensForUser(user);
+    const { accessToken, refreshToken, isProvider } = await issueTokensForUser(user);
 
-    const response = { user: serializeUser(user), accessToken, refreshToken };
+    const response = { user: serializeUser(user, isProvider), accessToken, refreshToken };
 
     // Enviar email de verificación de forma asíncrona (no bloquear registro)
     setImmediate(() => {
@@ -54,7 +54,7 @@ async function register({ email, password }) {
           );
         });
     });
-    
+
     console.log(`[register] Registration successful for user: ${user.id}`);
     return response;
   } catch (error) {
@@ -70,8 +70,8 @@ async function login({ email, password }) {
   const ok = await verifyPassword(password, user.password_hash);
   if (!ok) throw unauthorized('AUTH.INVALID_CREDENTIALS', 'Credenciales inválidas');
 
-  const { accessToken, refreshToken } = await issueTokensForUser(user);
-  return { user: serializeUser(user), accessToken, refreshToken };
+  const { accessToken, refreshToken, isProvider } = await issueTokensForUser(user);
+  return { user: serializeUser(user, isProvider), accessToken, refreshToken };
 }
 
 async function refresh({ refreshToken }) {
@@ -89,8 +89,8 @@ async function refresh({ refreshToken }) {
   // rotate
   await stored.update({ revoked: true });
   const user = await User.findByPk(stored.user_id);
-  const { accessToken, refreshToken: newRefresh } = await issueTokensForUser(user);
-  return { user: serializeUser(user), accessToken, refreshToken: newRefresh };
+  const { accessToken, refreshToken: newRefresh, isProvider } = await issueTokensForUser(user);
+  return { user: serializeUser(user, isProvider), accessToken, refreshToken: newRefresh };
 }
 
 async function logout({ refreshToken }) {
@@ -104,8 +104,36 @@ async function logout({ refreshToken }) {
 
 async function issueTokensForUser(user) {
   const jti = uuidv4();
-  const accessToken = signAccessToken(user);
+
+  // Determinar si es proveedor para inyectarlo en el JWT
+  let isProvider = false;
+  try {
+    const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'http://localhost:4003';
+    const checkUrl = `${providerServiceUrl}/api/v1/providers/check/${user.id}`;
+    console.log(`[issueTokensForUser] Checking provider status at: ${checkUrl}`);
+
+    const response = await fetch(checkUrl, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    console.log(`[issueTokensForUser] Response status: ${response.status}`);
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[issueTokensForUser] Response data:`, data);
+      isProvider = !!data.isProvider;
+    } else {
+      console.warn(`[issueTokensForUser] Non-OK response: ${response.status} ${response.statusText}`);
+    }
+  } catch (error) {
+    console.warn(`[issueTokensForUser] Error checking provider status for user ${user.id}:`, error.message);
+  }
+
+  console.log(`[issueTokensForUser] Final isProvider value for user ${user.id}: ${isProvider}`);
+
+  const accessToken = signAccessToken(user, isProvider);
   const refreshToken = signRefreshToken(user, jti);
+
   await RefreshToken.create({
     user_id: user.id,
     jti,
@@ -113,11 +141,11 @@ async function issueTokensForUser(user) {
     revoked: false,
     expires_at: expiresAtFromNow(process.env.REFRESH_TOKEN_TTL || '30d')
   });
-  return { accessToken, refreshToken };
+  return { accessToken, refreshToken, isProvider };
 }
 
-function serializeUser(user) {
-  return { id: user.id, email: user.email, role: user.role, isEmailVerified: user.is_email_verified };
+function serializeUser(user, isProvider = false) {
+  return { id: user.id, email: user.email, role: user.role, isEmailVerified: user.is_email_verified, isProvider };
 }
 
 // Generar y enviar token de verificación de email
@@ -182,8 +210,8 @@ async function getUsersSummary() {
   try {
     // Intentar obtener desde el gateway o directamente del provider-service
     const gatewayUrl = process.env.GATEWAY_URL || process.env.API_GATEWAY_URL || 'http://localhost:4000';
-    const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'http://localhost:3002';
-    
+    const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'http://localhost:4003';
+
     // Intentar primero por gateway, luego directo
     let response;
     try {
@@ -195,7 +223,7 @@ async function getUsersSummary() {
         headers: { 'Content-Type': 'application/json' }
       });
     }
-    
+
     if (response && response.ok) {
       const data = await response.json();
       providerUserIds = Array.isArray(data.userIds) ? data.userIds : [];
@@ -209,11 +237,11 @@ async function getUsersSummary() {
   const { Op } = require('sequelize');
   const soloClientes = providerUserIds.length > 0
     ? await User.count({
-        where: {
-          role: 'user',
-          id: { [Op.notIn]: providerUserIds }
-        }
-      })
+      where: {
+        role: 'user',
+        id: { [Op.notIn]: providerUserIds }
+      }
+    })
     : await User.count({ where: { role: 'user' } }); // Fallback si no hay proveedores
 
   // Proveedores: cantidad de user_ids únicos que tienen perfil de proveedor
@@ -222,7 +250,7 @@ async function getUsersSummary() {
   // Usuarios activos en los últimos 30 días (basado en refresh tokens)
   // Solo contar usuarios que realmente existen en la tabla users
   const thirtyDaysAgo = dayjs().subtract(30, 'days').toDate();
-  
+
   const { sequelize } = require('../../models');
   const [activeUsersResult] = await sequelize.query(`
     SELECT COUNT(DISTINCT rt.user_id) as count
@@ -234,7 +262,7 @@ async function getUsersSummary() {
     replacements: { thirtyDaysAgo },
     type: sequelize.QueryTypes.SELECT
   });
-  
+
   const activeUsers30d = Number(activeUsersResult?.count || 0);
 
   // Calcular clientes activos: usuarios activos que NO son proveedores (y existen)
@@ -289,12 +317,12 @@ async function getUsersSummary() {
   };
 }
 
-module.exports = { 
-  register, 
-  login, 
-  refresh, 
-  logout, 
-  sendVerificationEmailForUser, 
+module.exports = {
+  register,
+  login,
+  refresh,
+  logout,
+  sendVerificationEmailForUser,
   verifyEmailToken,
   getUsersSummary
 };
