@@ -57,7 +57,7 @@ async function sendVerificationEmail(req, res, next) {
 
 async function verifyEmail(req, res, next) {
   try {
-    const { token } = req.query;
+    const { token } = req.body;
     if (!token) {
       return res.status(400).json({ error: { code: 'AUTH.MISSING_TOKEN', message: 'Token requerido' } });
     }

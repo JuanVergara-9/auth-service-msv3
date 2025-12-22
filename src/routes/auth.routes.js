@@ -10,7 +10,7 @@ router.get('/me', requireAuth, ctrl.me);
 
 // Email verification
 router.post('/verify-email/send', requireAuth, ctrl.sendVerificationEmail);
-router.get('/verify-email', ctrl.verifyEmail);
+router.post('/verify-email', ctrl.verifyEmail);
 
 // Admin stats
 router.get('/admin/users-summary', ctrl.usersSummary);
