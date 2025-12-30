@@ -135,12 +135,13 @@ function serializeUser(user, isProvider = false) {
 async function checkProviderStatus(userId) {
   try {
     const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'https://provider-service-msv3-production.up.railway.app';
-    console.log(`[checkProviderStatus] Verificando usuario ${userId} en: ${providerServiceUrl}/api/v1/providers/check/${userId}`);
+    const checkUrl = `${providerServiceUrl.replace(/\/+$/, '')}/api/v1/providers/check/${userId}`;
+    console.log(`[checkProviderStatus] Verificando usuario ${userId} en: ${checkUrl}`);
     
-    const response = await fetch(`${providerServiceUrl}/api/v1/providers/check/${userId}`, {
+    const response = await fetch(checkUrl, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(5000) // Timeout de 5s
+      signal: AbortSignal.timeout(5000)
     });
 
     if (response.ok) {
