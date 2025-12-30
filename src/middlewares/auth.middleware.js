@@ -13,7 +13,7 @@ function requireAuth(req, _res, next) {
   try {
     // pequeña tolerancia por si el reloj está levemente corrido
     const payload = verifyAccessToken(token, { clockTolerance: 5 });
-    req.user = { userId: payload.userId, role: payload.role };
+    req.user = { id: payload.userId, userId: payload.userId, role: payload.role };
     return next();
   } catch (e) {
     if (process.env.NODE_ENV !== 'production') {
