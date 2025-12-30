@@ -134,12 +134,20 @@ function serializeUser(user, isProvider = false) {
  */
 async function checkProviderStatus(userId) {
   try {
-    const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'http://localhost:3002';
-    const response = await fetch(`${providerServiceUrl}/api/v1/providers/check/${userId}`);
+    const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'https://provider-service-msv3-production.up.railway.app';
+    console.log(`[checkProviderStatus] Verificando usuario ${userId} en: ${providerServiceUrl}/api/v1/providers/check/${userId}`);
+    
+    const response = await fetch(`${providerServiceUrl}/api/v1/providers/check/${userId}`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(5000) // Timeout de 5s
+    });
+
     if (response.ok) {
       const data = await response.json();
       return !!data.isProvider;
     }
+    console.warn(`[checkProviderStatus] Respuesta no exitosa (${response.status}) para usuario ${userId}`);
   } catch (error) {
     console.warn(`[checkProviderStatus] Error al verificar estado de proveedor para usuario ${userId}:`, error.message);
   }
