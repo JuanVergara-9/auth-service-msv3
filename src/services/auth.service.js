@@ -37,9 +37,10 @@ async function register({ email, password }) {
     console.log(`[register] User created with ID: ${user.id}`);
 
     console.log(`[register] Issuing tokens...`);
-    const { accessToken, refreshToken } = await issueTokensForUser(user);
+    const isProvider = false; // Usuario nuevo nunca es proveedor todavía
+    const { accessToken, refreshToken } = await issueTokensForUser(user, isProvider);
 
-    const response = { user: serializeUser(user), accessToken, refreshToken };
+    const response = { user: serializeUser(user, isProvider), accessToken, refreshToken };
 
     // Enviar email de verificación de forma asíncrona (no bloquear registro)
     setImmediate(() => {
@@ -70,8 +71,9 @@ async function login({ email, password }) {
   const ok = await verifyPassword(password, user.password_hash);
   if (!ok) throw unauthorized('AUTH.INVALID_CREDENTIALS', 'Credenciales inválidas');
 
-  const { accessToken, refreshToken } = await issueTokensForUser(user);
-  return { user: serializeUser(user), accessToken, refreshToken };
+  const isProvider = await checkProviderStatus(user.id);
+  const { accessToken, refreshToken } = await issueTokensForUser(user, isProvider);
+  return { user: serializeUser(user, isProvider), accessToken, refreshToken };
 }
 
 async function refresh({ refreshToken }) {
@@ -89,8 +91,9 @@ async function refresh({ refreshToken }) {
   // rotate
   await stored.update({ revoked: true });
   const user = await User.findByPk(stored.user_id);
-  const { accessToken, refreshToken: newRefresh } = await issueTokensForUser(user);
-  return { user: serializeUser(user), accessToken, refreshToken: newRefresh };
+  const isProvider = await checkProviderStatus(user.id);
+  const { accessToken, refreshToken: newRefresh } = await issueTokensForUser(user, isProvider);
+  return { user: serializeUser(user, isProvider), accessToken, refreshToken: newRefresh };
 }
 
 async function logout({ refreshToken }) {
@@ -102,9 +105,9 @@ async function logout({ refreshToken }) {
   return { ok: true };
 }
 
-async function issueTokensForUser(user) {
+async function issueTokensForUser(user, isProvider = false) {
   const jti = uuidv4();
-  const accessToken = signAccessToken(user);
+  const accessToken = signAccessToken(user, isProvider);
   const refreshToken = signRefreshToken(user, jti);
   await RefreshToken.create({
     user_id: user.id,
@@ -116,8 +119,31 @@ async function issueTokensForUser(user) {
   return { accessToken, refreshToken };
 }
 
-function serializeUser(user) {
-  return { id: user.id, email: user.email, role: user.role, isEmailVerified: user.is_email_verified };
+function serializeUser(user, isProvider = false) {
+  return { 
+    id: user.id, 
+    email: user.email, 
+    role: user.role, 
+    isEmailVerified: user.is_email_verified,
+    isProvider 
+  };
+}
+
+/**
+ * Verifica si un usuario es proveedor consultando al provider-service
+ */
+async function checkProviderStatus(userId) {
+  try {
+    const providerServiceUrl = process.env.PROVIDER_SERVICE_URL || 'http://localhost:3002';
+    const response = await fetch(`${providerServiceUrl}/api/v1/providers/check/${userId}`);
+    if (response.ok) {
+      const data = await response.json();
+      return !!data.isProvider;
+    }
+  } catch (error) {
+    console.warn(`[checkProviderStatus] Error al verificar estado de proveedor para usuario ${userId}:`, error.message);
+  }
+  return false;
 }
 
 // Generar y enviar token de verificación de email
@@ -169,7 +195,8 @@ async function verifyEmailToken(token) {
   await verificationToken.update({ used: true });
   await verificationToken.user.update({ is_email_verified: true });
 
-  return { success: true, user: serializeUser(verificationToken.user) };
+  const isProvider = await checkProviderStatus(verificationToken.user.id);
+  return { success: true, user: serializeUser(verificationToken.user, isProvider) };
 }
 
 // Obtener resumen de usuarios (para admin dashboard)
