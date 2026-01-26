@@ -14,5 +14,6 @@ router.post('/verify-email', ctrl.verifyEmail);
 
 // Admin stats
 router.get('/admin/users-summary', ctrl.usersSummary);
+router.get('/admin/batch-emails', requireAuth, ctrl.batchEmails);
 
 module.exports = router;

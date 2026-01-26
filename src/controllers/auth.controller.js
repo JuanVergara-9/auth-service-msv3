@@ -73,4 +73,14 @@ async function usersSummary(req, res, next) {
   } catch (e) { next(e); }
 }
 
-module.exports = { register, login, me, refresh, logout, sendVerificationEmail, verifyEmail, usersSummary };
+async function batchEmails(req, res, next) {
+  try {
+    const { ids } = req.query;
+    if (!ids) return res.json({ emails: [] });
+    const userIds = ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
+    const result = await svc.getBatchEmails(userIds);
+    return res.json({ emails: result });
+  } catch (e) { next(e); }
+}
+
+module.exports = { register, login, me, refresh, logout, sendVerificationEmail, verifyEmail, usersSummary, batchEmails };

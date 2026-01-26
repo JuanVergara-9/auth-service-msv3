@@ -325,6 +325,15 @@ async function getUsersSummary() {
   };
 }
 
+async function getBatchEmails(userIds) {
+  if (!Array.isArray(userIds) || userIds.length === 0) return [];
+  const users = await User.findAll({
+    where: { id: userIds },
+    attributes: ['id', 'email']
+  });
+  return users.map(u => ({ id: u.id, email: u.email }));
+}
+
 module.exports = { 
   register, 
   login, 
@@ -332,5 +341,6 @@ module.exports = {
   logout, 
   sendVerificationEmailForUser, 
   verifyEmailToken,
-  getUsersSummary
+  getUsersSummary,
+  getBatchEmails
 };
